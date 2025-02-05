@@ -1,0 +1,174 @@
+@startuml
+
+title "DRAFT 1PPC - Sequence Diagram for Pricing and Promotions"
+
+<style>
+root {
+  HyperlinkColor #FFFFFF
+}
+</style>
+
+
+!define AzurePuml https://raw.githubusercontent.com/plantuml-stdlib/Azure-PlantUML/master/dist
+!includeurl AzurePuml/AzureCommon.puml
+!includeurl AzurePuml/Storage/AzureBlobStorage.puml
+!includeurl AzurePuml/Storage/AzureQueueStorage.puml
+!includeurl AzurePuml/Analytics/AzureDatabricks.puml
+!includeurl AzurePuml/Analytics/AzureEventHub.puml
+!includeurl AzurePuml/Compute/AzureAutomanagedVirtualMachine.puml
+!includeurl AzurePuml/Compute/AzureFunction.puml
+!includeurl AzurePuml/Integration/AzureServiceBus.puml
+!includeurl AzurePuml/Security/AzureKeyVault.puml
+
+!define ICONURL https://raw.githubusercontent.com/tupadr3/plantuml-icon-font-sprites/v2.2.0
+!includeurl ICONURL/common.puml
+!includeurl ICONURL/devicons/dotnet.puml
+!includeurl ICONURL/devicons/msql_server.puml
+!includeurl ICONURL/font-awesome-5/server.puml
+!includeurl ICONURL/font-awesome-5/hdd.puml
+!includeurl ICONURL/font-awesome-5/terminal.puml
+!includeurl ICONURL/font-awesome-5/desktop.puml
+!includeurl ICONURL/font-awesome-5/sync.puml
+!includeurl ICONURL/font-awesome-5/list.puml
+!includeurl ICONURL/font-awesome-5/question.puml
+!includeurl ICONURL/font-awesome-5/database.puml
+!includeurl ICONURL/font-awesome-5/python.puml
+!includeurl ICONURL/font-awesome-5/react.puml
+!includeurl ICONURL/font-awesome-5/java.puml
+
+box "CFIC"
+    database "CFIC-Store Table" as cfic_store
+    database "CFIC-item Table" as cfic_item
+end box
+
+box "ODS"
+    database "ODS DB" as ods
+end box
+
+box "PID"
+    database "PID DB" as pid
+end box
+
+box "Filesystem"
+    participant "eco028_process_date.dat" as date_file
+    participant "eco128_price_extract_to_1ppc.dat" as price_extract
+    participant "pri0005_items_ship_digital_delta_json" as pri_json
+    participant "pri0005_itms_$_digtl_curr_file.$.dat" as pri_cur
+    participant "Zip_Codes" as zip_codes
+    participant "pri0105_regional_retail_deltas_upserts" as upserts
+    participant "pri0105_regional_retail_deltas_deletes" as deletes
+
+end box
+
+box "TWS"
+    participant "TWS scheduler"  as tws
+    participant "CMW_ECO_027_000.CMW_ECO_ECOM_ADV_PROC_DATE_" as cmw_eco_027
+
+end box
+
+box "SCL"
+    participant "ECO_021_SCL" as ECO_021_SCL
+    participant "PRI_003_SCL" as PRI_003_SCL
+end box
+
+box "Informatica PC"
+    participant "CMW_ECO_021" as cmw_eco_021
+    participant "CMW_PRI_003_NEW" as cmw_pri_003
+    participant "CMW_PRI_105 REG" as cmw_pri_105
+
+box "Informatica IDMC"
+    participant "IDMC" as idmc
+
+end box
+
+box "Informatica Edge"
+    participant "Pricing_items_all_div_ship_digtl" as edge_post
+
+
+box "1PPC"
+    participant "NGPP.PPCITEMFILEPRICE" as item_price_topic
+    participant "NGPP.REGIONALPRICING" as reg_pri_topic
+end box
+
+
+tws++
+tws -> ECO_021_SCL++ : Trigger SCL
+
+
+ECO_021_SCL -> cmw_eco_021++ #orange : Initiates
+tws--
+ECO_021_SCL--
+cmw_eco_021 -> ods++  : Read (DB Direct Connect)
+ods--
+cmw_eco_021 -> cfic_store++ : Read (DB Direct Connect)
+
+cfic_store--
+cmw_eco_021 -> cfic_item++ : Read (DB Direct Connect)
+cfic_item--
+cmw_eco_021 -> pid++ : Read (Flat File)
+pid--
+
+
+cmw_eco_021 -> date_file++ #red : Read (Flat File)
+price_extract++
+cmw_eco_021 --> price_extract : Write (Flat File)
+cmw_eco_021--
+
+
+cmw_eco_027++ #green
+cmw_eco_027 -> date_file : Advances Date
+date_file--
+cmw_eco_021 <-> cmw_eco_027 : Dependency
+cmw_eco_027--
+
+tws++
+
+tws -> PRI_003_SCL++ : Initiate Job
+tws--
+
+PRI_003_SCL -> cmw_pri_003++ #orange : Initiates
+PRI_003_SCL--
+cmw_pri_003 -> price_extract : Read (Flat File)
+price_extract--
+cmw_pri_003 -> pri_json++ : Writes Json
+cmw_pri_003 -> pri_cur++ : Writes Current (Flat File)
+cmw_pri_003--
+
+
+
+edge_post++ #orange
+item_price_topic++
+edge_post -> pri_json : Reads
+edge_post -> item_price_topic : Posts
+edge_post--
+item_price_topic--
+pri_json--
+
+
+
+tws++
+tws -> cmw_pri_105++ #orange
+tws--
+
+cmw_pri_105 -> pri_cur : Read (Flat File)
+cmw_pri_105-> zip_codes++ : Read (Flat File)
+cmw_pri_105 -> upserts++ : Writes Json (Flat File)
+cmw_pri_105 -> deletes++ : Writes Json (Flat File)
+
+cmw_pri_105--
+pri_cur--
+zip_codes--
+
+idmc++ #orange
+
+
+idmc -> deletes : Read (Flat File)
+idmc -> reg_pri_topic++ : Posts Jason to Kafka Topic
+idmc -> upserts : Read (Flat File Json)
+idmc -> reg_pri_topic : Posts Json to Kafka Topic
+
+reg_pri_topic--
+upserts--
+
+
+@enduml
